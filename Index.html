@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jdenticon Brute Force with Color Matching and Similarity Check</title>
+  <script src="https://cdn.jsdelivr.net/npm/jdenticon@3.0.1/dist/jdenticon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/uuid/dist/umd/uuidv4.min.js"></script>
+  <style>
+    .svg-container {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 20px;
+    }
+    .svg-container div {
+      width: 45%;
+    }
+    svg {
+      max-width: 100%;
+      height: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>Jdenticon Brute Force with Color Matching and Similarity Check</h1>
+  <label for="target-svg">Paste Target SVG Code:</label><br>
+  <textarea id="target-svg" rows="10" cols="50" placeholder="Paste the SVG code here..."></textarea><br><br>
+  
+  <label for="icon-size">Icon Size (pixels):</label>
+  <input type="number" id="icon-size" value="26"><br><br>
+  
+  <label for="similarity-threshold">Similarity Threshold (0-1000):</label>
+  <input type="number" id="similarity-threshold" value="250" min="0" max="1000"><br><br>
+  
+  <button id="start-button">Start Brute Force</button>
+  <p id="status"></p>
+  <p id="result"></p>
+  
+  <div id="svg-container" class="svg-container"></div>
+
+  <script>
+    // Function to extract the colors from the SVG string
+    function extractColors(svg) {
+      const colorRegex = /fill="(#[0-9a-fA-F]{6}|#[0-9a-fA-F]{3})"/g;
+      let colors = [];
+      let match;
+      
+      while (match = colorRegex.exec(svg)) {
+        colors.push(match[1]);
+      }
+      
+      return colors;
+    }
+
+    // Levenshtein distance function to compare similarity between two strings
+    function levenshtein(a, b) {
+      var tmp;
+      var i, j;
+      var alen = a.length;
+      var blen = b.length;
+      var arr = [];
+    
+      if (alen === 0) { return blen; }
+      if (blen === 0) { return alen; }
+    
+      for (i = 0; i <= alen; i++) {
+        arr[i] = [i];
+      }
+    
+      for (j = 0; j <= blen; j++) {
+        arr[0][j] = j;
+      }
+    
+      for (i = 1; i <= alen; i++) {
+        for (j = 1; j <= blen; j++) {
+          tmp = a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1;
+          arr[i][j] = Math.min(arr[i - 1][j] + 1, Math.min(arr[i][j - 1] + 1, arr[i - 1][j - 1] + tmp));
+        }
+      }
+    
+      return arr[alen][blen];
+    }
+
+    // Web Worker implementation within the main file
+    if (window.Worker) {
+      const workerBlob = new Blob([`
+        self.importScripts('https://cdn.jsdelivr.net/npm/jdenticon@3.0.1/dist/jdenticon.min.js', 'https://cdn.jsdelivr.net/npm/uuid/dist/umd/uuidv4.min.js');
+        
+        // Sleep function for delay between batches
+        function sleep(ms) {
+          return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        // Function to extract colors from SVG
+        function extractColors(svg) {
+          const colorRegex = /fill="(#[0-9a-fA-F]{6}|#[0-9a-fA-F]{3})"/g;
+          let colors = [];
+          let match;
+          
+          while (match = colorRegex.exec(svg)) {
+            colors.push(match[1]);
+          }
+          
+          return colors;
+        }
+
+        // Levenshtein distance to compare similarity
+        function levenshtein(a, b) {
+          var tmp;
+          var i, j;
+          var alen = a.length;
+          var blen = b.length;
+          var arr = [];
+        
+          if (alen === 0) { return blen; }
+          if (blen === 0) { return alen; }
+        
+          for (i = 0; i <= alen; i++) {
+            arr[i] = [i];
+          }
+        
+          for (j = 0; j <= blen; j++) {
+            arr[0][j] = j;
+          }
+        
+          for (i = 1; i <= alen; i++) {
+            for (j = 1; j <= blen; j++) {
+              tmp = a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1;
+              arr[i][j] = Math.min(arr[i - 1][j] + 1, Math.min(arr[i][j - 1] + 1, arr[i - 1][j - 1] + tmp));
+            }
+          }
+        
+          return arr[alen][blen];
+        }
+
+        self.onmessage = async function(e) {
+          const { targetSvg, size, batchSize, similarityThreshold } = e.data;
+          const targetColors = extractColors(targetSvg);  // Extract colors from the target SVG
+          let attempts = 0;
+
+          async function bruteForce() {
+            while (true) {
+              // Generate a batch of UUIDs
+              const batchSeeds = Array.from({ length: batchSize }, () => uuidv4());
+              const batchSvgs = batchSeeds.map(seed => jdenticon.toSvg(seed, size));
+
+              // Check if any generated SVG matches the target colors and is similar enough for shapes
+              for (let i = 0; i < batchSize; i++) {
+                attempts++;
+                const generatedColors = extractColors(batchSvgs[i]);
+                
+                // Check if the colors match exactly
+                const colorsMatch = targetColors.every(color => generatedColors.includes(color));
+                
+                // If colors match exactly, check similarity of the shapes
+                if (colorsMatch) {
+                  const similarity = levenshtein(batchSvgs[i], targetSvg);
+                  
+                  if (similarity <= similarityThreshold) {
+                    self.postMessage({ seed: batchSeeds[i], attempts, similarity, colorsMatch, generatedSvg: batchSvgs[i] });
+                    return;
+                  }
+                }
+              }
+
+              // Send progress message after every batch
+              self.postMessage({ attempts });
+
+              // Introduce a delay between batches to reduce load
+              await sleep(10);  // Delay in milliseconds (adjust as needed)
+            }
+          }
+
+          bruteForce();
+        };
+      `], { type: 'application/javascript' });
+
+      const worker = new Worker(URL.createObjectURL(workerBlob));
+
+      worker.onmessage = function(e) {
+        const { seed, attempts, similarity, colorsMatch, generatedSvg } = e.data;
+
+        if (seed) {
+          // Display result and SVGs
+          document.getElementById("result").textContent = `Matching seed found: ${seed} (Attempts: ${attempts}) - Similarity: ${similarity} (Colors Match: ${colorsMatch})`;
+
+          // Display target and generated SVG side by side
+          const targetSvgContainer = document.createElement("div");
+          targetSvgContainer.innerHTML = `<h3>Target SVG</h3>${document.getElementById("target-svg").value.trim()}`;
+          
+          const generatedSvgContainer = document.createElement("div");
+          generatedSvgContainer.innerHTML = `<h3>Generated SVG</h3>${generatedSvg}`;
+
+          document.getElementById("svg-container").innerHTML = '';
+          document.getElementById("svg-container").appendChild(targetSvgContainer);
+          document.getElementById("svg-container").appendChild(generatedSvgContainer);
+
+          worker.terminate();
+        } else {
+          document.getElementById("status").textContent = `Attempts: ${attempts}`;
+        }
+      };
+
+      document.getElementById("start-button").addEventListener("click", () => {
+        const targetSvg = document.getElementById("target-svg").value.trim();
+        const size = parseInt(document.getElementById("icon-size").value, 10);
+        const similarityThreshold = parseInt(document.getElementById("similarity-threshold").value, 10);
+        const batchSize = 1000; // Adjust batch size for performance
+
+        if (!targetSvg || isNaN(size) || size <= 0 || isNaN(similarityThreshold)) {
+          alert("Please enter valid inputs.");
+          return;
+        }
+
+        // Start the brute-force process with the worker
+        worker.postMessage({ targetSvg, size, batchSize, similarityThreshold });
+      });
+    } else {
+      alert("Web Workers are not supported in your browser.");
+    }
+  </script>
+</body>
+</html>
